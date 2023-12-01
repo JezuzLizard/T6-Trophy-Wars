@@ -34,7 +34,62 @@ init()
 	{
 		level.trophy_systems[ "team" + i ] = [];
 	}
+
+	set_dvar_if_unset( "trophy_system_invis_reveal_radius_sq", 150000 );
+	set_dvar_if_unset( "trophy_wars_assassin_invis_attack_reveal_fade_in_ticks", 80 );
+	set_dvar_if_unset( "trophy_wars_assassin_invis_trophy_reveal_fade_in_ticks", 40 );
+	set_dvar_if_unset( "trophy_wars_assassin_insta_kill_cooldown", 15 );
+	set_dvar_if_unset( "trophy_system_reveal_delay_ms", 1500 );
+
 	level thread on_player_connect();
+
+	level waittill( "prematch_over" );
+	wait 1;
+	level.callbackplayerdamage_old2 = level.callbackplayerdamage;
+	level.callbackplayerdamage = ::trophy_wars_player_damage;
+}
+
+trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeath, sweapon, vpoint, vdir, shitloc, timeoffset, boneindex )
+{
+	if ( isDefined( sweapon ) )
+	{
+		switch ( sweapon )
+		{
+			case "trophy_system_mp":
+				idamage = int( self.maxhealth / 2 ) + 1;
+				break;
+			case "knife_held_mp":
+			case "knife_mp":
+			case "riotshield_mp":
+			case "knife_ballistic_mp":
+				if ( isDefined( eattacker ) && distanceSquared( eattacker.origin, self.origin ) > 10000 )
+				{
+					idamage = self.maxhealth;
+				}
+				else if ( eattacker.is_assassin && eattacker.assassin_vars[ "insta_kill" ].cooldown == 0 )
+				{
+					idamage = self.maxhealth;
+					eattacker notify( "assassin_insta_kill" );
+				}
+				else
+				{
+					idamage = int( self.maxhealth / 2 ) + 1;
+				}
+				break;
+			case "concussion_grenade_mp":
+			case "proximity_grenade_aoe_mp":
+			case "proximity_grenade_mp":
+				idamage = int( self.maxhealth / 2 ) + 1;
+				break;
+			case "claymore_mp":
+			case "satchel_charge_mp":
+			case "sticky_grenade_mp":
+				idamage = self.maxhealth;
+				break;
+		}
+	}
+
+	self [[ level.callbackplayerdamage_old2 ]]( einflictor, eattacker, idamage, idflags, smeansofdeath, sweapon, vpoint, vdir, shitloc, timeoffset, boneindex );
 }
 
 on_player_connect()
@@ -43,16 +98,31 @@ on_player_connect()
 	{
 		level waittill( "connected", player );
 		player thread on_player_spawned();
-		player.invisibility_bar = player createbar( ( 1, 1, 1 ), 55, 8, 0.8 );
-		player.invisibility_bar seticonshader( "progress_bar_bg" );
-		player.invisibility_bar setpoint( "BOTTOM", "BOTTOM", 0, 20 );
-		player.invisibility_bar.alpha = 0;
-		player.invisibility_text = player createfontstring( "objective", 1.5 );
-		player.invisibility_text.alpha = 0;
-		player.invisibility_text.label = &"INVISIBLE";
-		player.invisibility_text setpoint( "BOTTOM", "BOTTOM", 0, 10 );
-		player.revealed_attack = false;
-		player.revealed_trophy = false;
+
+		player.is_assassin = false;
+		player.assassin_vars = [];
+		player.assassin_vars[ "insta_kill" ] = spawnStruct();
+		player.assassin_vars[ "insta_kill" ].cooldown = 0;
+		player.assassin_vars[ "insta_kill" ].hud = spawnStruct();
+		player.assassin_vars[ "insta_kill" ].hud.timer = player createclienttimer( "objective", 1.5 );
+		player.assassin_vars[ "insta_kill" ].hud.timer.alpha = 0;
+		player.assassin_vars[ "insta_kill" ].hud.timer setpoint( "BOTTOM_RIGHT", "BOTTOM_RIGHT", -30, 10 );
+		player.assassin_vars[ "insta_kill" ].hud.text = player createfontstring( "objective", 1.5 );
+		player.assassin_vars[ "insta_kill" ].hud.text.alpha = 0;
+		player.assassin_vars[ "insta_kill" ].hud.text.label = &"INSTA KILL";
+		player.assassin_vars[ "insta_kill" ].hud.text setpoint( "BOTTOM_RIGHT", "BOTTOM_RIGHT", -30, -10 );
+		player.assassin_vars[ "invisibility" ] = spawnStruct();
+		player.assassin_vars[ "invisibility" ].hud = spawnStruct();
+		player.assassin_vars[ "invisibility" ].hud.bar = player createbar( ( 1, 1, 1 ), 55, 8, 0.8 );
+		player.assassin_vars[ "invisibility" ].hud.bar seticonshader( "progress_bar_bg" );
+		player.assassin_vars[ "invisibility" ].hud.bar.alpha = 0;
+		player.assassin_vars[ "invisibility" ].hud.bar setpoint( "BOTTOM", "BOTTOM", 0, 20 );
+		player.assassin_vars[ "invisibility" ].hud.text = player createfontstring( "objective", 1.5 );
+		player.assassin_vars[ "invisibility" ].hud.text.alpha = 0;
+		player.assassin_vars[ "invisibility" ].hud.text.label = &"INVISIBLE";
+		player.assassin_vars[ "invisibility" ].hud.text setpoint( "BOTTOM", "BOTTOM", 0, 10 );
+		player.assassin_vars[ "invisibility" ].revealed_attack = false;
+		player.assassin_vars[ "invisibility" ].revealed_trophy = false;
 	}
 }
 
@@ -63,14 +133,18 @@ on_player_spawned()
 		self waittill( "spawned_player" );
 		if ( self hasPerk( "specialty_gpsjammer" ) )
 		{
-			self.invisibility_bar showelem();
-			self.invisibility_text.alpha = 1;
-			self.invisibility_bar updateBar( 1 );
+			self.is_assassin = true;
+			self.assassin_vars[ "invisibility" ].hud.bar showelem();
+			self.assassin_vars[ "invisibility" ].hud.text.alpha = 1;
+			self.assassin_vars[ "invisibility" ].hud.bar updateBar( 1 );
+			self.assassin_vars[ "insta_kill" ].hud.timer.alpha = 1;
+			self.assassin_vars[ "insta_kill" ].hud.text.alpha = 1;
 			self setPerk( "specialty_noname" );
 			self change_player_visibility( true );
 			self thread watch_invisibility();
 			self thread watch_for_death();
 			self thread watch_revealing();
+			self thread watch_assasin_insta_kill_ability();
 		}
 	}
 }
@@ -80,8 +154,15 @@ watch_for_death()
 	self endon( "disconnect" );
 	self waittill( "death" );
 
-	self.invisibility_bar hideelem();
-	self.invisibility_text.alpha = 0;
+	self.is_assassin = false;
+
+	self.assassin_vars[ "invisibility" ].hud.bar hideelem();
+	self.assassin_vars[ "invisibility" ].hud.text.alpha = 0;
+	self.assassin_vars[ "invisibility" ].revealed_attack = false;
+	self.assassin_vars[ "invisibility" ].revealed_trophy = false;
+	self.assassin_vars[ "insta_kill" ].cooldown = 0;
+	self.assassin_vars[ "insta_kill" ].hud.timer.alpha = 0;
+	self.assassin_vars[ "insta_kill" ].hud.text.alpha = 0;
 
 	self change_player_visibility( false );
 }
@@ -91,7 +172,8 @@ change_player_visibility( invisible )
 	players = getPlayers();
 	for ( i = 0; i < players.size; i++ )
 	{
-		if ( players[ i ].team != self.team )
+		if ( isDefined( players[ i ] ) && isDefined( players[ i ].team ) && players[ i ].team != self.team 
+			&& !players[ i ].is_assassin )
 		{
 			if ( invisible )
 			{
@@ -106,21 +188,21 @@ change_player_visibility( invisible )
 	if ( invisible )
 	{
 		self.ignoreme = true;
-		self.invisibility_text.label = &"INVISIBLE";
+		self.assassin_vars[ "invisibility" ].hud.text.label = &"INVISIBLE";
 	}
 	else
 	{
 		self.ignoreme = false;
-		self.invisibility_text.label = &"NOT INVISIBLE";
+		self.assassin_vars[ "invisibility" ].hud.text.label = &"NOT INVISIBLE";
 	}
 }
 
 fade_out_invisible_player( player )
 {
-	for ( i = 0; i >= 0; i-- )
+	for ( i = 0; i > 0; i-- )
 	{
 		wait 0.05;
-		player.invisibility_bar updateBar( i / 15 );
+		player.assassin_vars[ "invisibility" ].hud.bar updateBar( i / 15 );
 	}
 }
 
@@ -131,7 +213,7 @@ fade_in_invisible_player( player, time )
 	for ( i = 0; i < time; i++ )
 	{
 		wait 0.05;
-		player.invisibility_bar updateBar( i / time );
+		player.assassin_vars[ "invisibility" ].hud.bar updateBar( i / time );
 	}
 }
 
@@ -139,21 +221,21 @@ try_going_invisible_again()
 {
 	for ( ;; )
 	{
-		if ( self.revealed_attack )
+		if ( self.assassin_vars[ "invisibility" ].revealed_attack )
 		{
-			time = getDvarIntDefault( "trophy_wars_invisibilty_attack_reveal_fade_in_ticks", 80 );
+			time = getDvarInt( "trophy_wars_assassin_invis_attack_reveal_fade_in_ticks" );
 		}
-		else if ( self.revealed_trophy )
+		else if ( self.assassin_vars[ "invisibility" ].revealed_trophy )
 		{
-			time = getDvarIntDefault( "trophy_wars_invisibilty_trophy_reveal_fade_in_ticks", 40 );
+			time = getDvarInt( "trophy_wars_assassin_invis_trophy_reveal_fade_in_ticks" );
 		}
 		else
 		{
 			time = 1;
 		}
 
-		self.revealed_attack = false;
-		self.revealed_trophy = false;
+		self.assassin_vars[ "invisibility" ].revealed_attack = false;
+		self.assassin_vars[ "invisibility" ].revealed_trophy = false;
 		
 		self thread fade_in_invisible_player( self, time );
 		event = self waittill_any_timeout( time / 20, "revealed" );
@@ -163,7 +245,7 @@ try_going_invisible_again()
 			break;
 		}
 
-		self.invisibility_bar updateBar( 0.01 );
+		self.assassin_vars[ "invisibility" ].hud.bar updateBar( 0.01 );
 	}
 }
 
@@ -185,7 +267,7 @@ watch_invisibility()
 	{
 		wait 0.05;
 
-		if ( self.revealed_attack || self.revealed_trophy )
+		if ( self.assassin_vars[ "invisibility" ].revealed_attack || self.assassin_vars[ "invisibility" ].revealed_trophy )
 		{
 			self update_invisibilty();
 		}
@@ -194,9 +276,9 @@ watch_invisibility()
 
 revealing_attack_action()
 {
-	  should_reveal = self secondaryoffhandbuttonpressed() && isDefined( self.grenadetypesecondary ) && self getWeaponAmmoStock( self.grenadetypesecondary ) > 0 
-		|| self fragbuttonpressed() && isDefined( self.grenadetypeprimary ) && self getWeaponAmmoStock( self.grenadetypeprimary ) > 0 
-		|| self meleebuttonpressed() || self attackbuttonpressed();
+	should_reveal = self secondaryoffhandbuttonpressed() && isDefined( self.grenadetypesecondary ) && self getWeaponAmmoStock( self.grenadetypesecondary ) > 0 
+			|| self fragbuttonpressed() && isDefined( self.grenadetypeprimary ) && self getWeaponAmmoStock( self.grenadetypeprimary ) > 0 
+			|| self meleebuttonpressed() || self attackbuttonpressed();
 	
 	if ( should_reveal )
 	{
@@ -256,9 +338,10 @@ revealed_by_trophy_system()
 		}
 		for ( j = 0; j < trophies.size; j++ )
 		{
-			if ( isDefined( trophies[ j ] ) && distancesquared( trophies[ j ].origin, self.origin ) < getDvarIntDefault( "trophy_system_reveal_radius_sq", 150000 ) )
+			if ( isDefined( trophies[ j ] ) && distancesquared( trophies[ j ].origin, self.origin ) < getDvarInt( "trophy_system_invis_reveal_radius_sq" )
+				&& trophies[ j ].spawn_time < (getTime() + getDvarInt( "trophy_system_reveal_delay_ms" )) )
 			{
-				return true;;
+				return true;
 			}
 		}
 	}
@@ -276,15 +359,41 @@ watch_revealing()
 
 		if ( self revealing_attack_action() )
 		{
-			self.revealed_attack = true;
+			self.assassin_vars[ "invisibility" ].revealed_attack = true;
 
 			self notify( "revealed" );
 		}
 		else if ( self revealed_by_trophy_system() )
 		{
-			self.revealed_trophy = true;
+			self.assassin_vars[ "invisibility" ].revealed_trophy = true;
 
 			self notify( "revealed" );
+		}
+	}
+}
+
+watch_assasin_insta_kill_ability()
+{
+	self endon( "disconnect" );
+	self endon( "death" );
+
+	for (;;)
+	{
+		self.assassin_vars[ "insta_kill" ].hud.timer setText( "READY" );
+		self.assassin_vars[ "insta_kill" ].cooldown = 0;
+
+		self waittill( "assassin_insta_kill" );
+
+		self.assassin_vars[ "insta_kill" ].cooldown = getDvarInt( "trophy_wars_assassin_insta_kill_cooldown" );
+
+		cooldown_time = self.assassin_vars[ "insta_kill" ].cooldown;
+
+		self.assassin_vars[ "insta_kill" ].hud.timer setTimer( cooldown_time );
+
+		for ( i = cooldown_time; i > 0; i-- )
+		{
+			wait 1;
+			self.assassin_vars[ "insta_kill" ].cooldown--;
 		}
 	}
 }

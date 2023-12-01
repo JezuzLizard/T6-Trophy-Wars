@@ -69,6 +69,7 @@ ontrophysystemspawn( watcher, player )
         self thread setreconmodeldeployed();
 	level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
 	self thread waittill_death();
+	self.spawn_time = getTime();
 }
 
 waittill_death()
