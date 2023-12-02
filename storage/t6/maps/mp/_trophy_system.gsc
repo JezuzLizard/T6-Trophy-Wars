@@ -67,22 +67,10 @@ ontrophysystemspawn( watcher, player )
 
     if ( isdefined( watcher.reconmodel ) )
         self thread setreconmodeldeployed();
-	level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
-	self thread waittill_death();
-	self.spawn_time = getTime();
-}
 
-waittill_death()
-{
-	self waittill( "death" );
-	for ( i = 0; i < level.trophy_systems[ self.team ].size; i++ )
-	{
-		if ( level.trophy_systems[ self.team ][ i ] == self )
-		{
-			level.trophy_systems[ self.team ][ i ] = undefined;
-			break;
-		}
-	}
+	self.spawn_time = getTime();
+
+	level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
 }
 
 setreconmodeldeployed()
