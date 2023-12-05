@@ -36,11 +36,18 @@ init()
 		level.trophy_systems[ "team" + i ] = [];
 	}
 
-	set_dvar_if_unset( "trophy_system_invis_reveal_radius", 387 );
-	set_dvar_if_unset( "trophy_wars_assassin_assassinate_cooldown", 15 );
 	set_dvar_if_unset( "trophy_system_reveal_delay_ms", 1500 );
-	set_dvar_if_unset( "assassin_invis_restore_factor", 2.5 );
+	set_dvar_if_unset( "assassin_invis_base_restore_factor", 2.5 );
+	set_dvar_if_unset( "assassin_invis_sprint_decay_factor", 2.5 );
+	set_dvar_if_unset( "assassin_invis_crouch_restore_factor", 1.25 );
+	set_dvar_if_unset( "assassin_invis_airborne_decay_factor", 2.0 );
 	set_dvar_if_unset( "assassin_invis_decay_factor", 1.0 );
+	set_dvar_if_unset( "assassin_invis_trophy_reveal_radius", 750 );
+	set_dvar_if_unset( "assassin_invis_trophy_reveal_radius_max_decay", 10 );
+	set_dvar_if_unset( "assassin_invis_player_nearby_reveal_radius", 187.5 );
+	set_dvar_if_unset( "assassin_invis_player_nearby_reveal_radius_max_decay", 20 );
+	set_dvar_if_unset( "assassin_assassinate_failure_cooldown", 15 );
+	set_dvar_if_unset( "assassin_assassinate_success_cooldown", 8 );
 
 	level thread on_player_connect();
 
@@ -48,19 +55,12 @@ init()
 	wait 1;
 	level.callbackplayerdamage_old2 = level.callbackplayerdamage;
 	level.callbackplayerdamage = ::trophy_wars_player_damage;
+	level.callbackplayerlaststand = ::trophy_wars_player_laststand;
 }
 
-player_shield_facing_attacker( vdir, limit )
+trophy_wars_player_laststand( einflictor, attacker, idamage, smeansofdeath, sweapon, vdir, shitloc, psoffsettime, deathanimduration )
 {
-	orientation = self getplayerangles();
-	forwardvec = anglestoforward( orientation );
-	forwardvec2d = ( forwardvec[0], forwardvec[1], 0 );
-	unitforwardvec2d = vectornormalize( forwardvec2d );
-	tofaceevec = vdir * -1;
-	tofaceevec2d = ( tofaceevec[0], tofaceevec[1], 0 );
-	unittofaceevec2d = vectornormalize( tofaceevec2d );
-	dotproduct = vectordot( unitforwardvec2d, unittofaceevec2d );
-	return dotproduct > limit;
+    //self.health = 1;
 }
 
 trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeath, sweapon, vpoint, vdir, shitloc, timeoffset, boneindex )
@@ -73,9 +73,14 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 				idamage = int( self.maxhealth / 2 ) + 1;
 				break;
 			case "knife_held_mp":
-				if ( eattacker.is_assassin && eattacker.assassin_vars[ "assassinate" ].cooldown == 0 )
+			    vangles = self getPlayerAngles()[1];
+        		pangles = eattacker getPlayerAngles()[1];
+			    anglediff = angleclamp180( vangles - pangles );
+
+				if ( eattacker.is_assassin && eattacker.assassin_vars[ "assassinate" ].cooldown == 0 && anglediff > -30 && anglediff < 70 )
 				{
 					idamage = self.maxhealth;
+					eattacker.assassin_vars[ "assassinate" ].success = true;
 				}
 				else 
 				{
@@ -126,6 +131,7 @@ on_player_connect()
 		player.is_assassin = false;
 		player.assassin_vars = [];
 		player.assassin_vars[ "assassinate" ] = spawnStruct();
+		player.assassin_vars[ "assassinate" ].success = false;
 		player.assassin_vars[ "assassinate" ].cooldown = 0;
 		player.assassin_vars[ "assassinate" ].hud = spawnStruct();
 		player.assassin_vars[ "assassinate" ].hud.timer = player createclienttimer( "objective", 1.5 );
@@ -155,6 +161,7 @@ on_player_spawned()
 	for (;;)
 	{
 		self waittill( "spawned_player" );
+		//self setPerk( "specialty_pistoldeath" );
 		if ( self hasPerk( "specialty_gpsjammer" ) )
 		{
 			self.is_assassin = true;
@@ -169,6 +176,7 @@ on_player_spawned()
 			self thread watch_attacking();
 			self thread watch_assasin_assassinate_ability();
 			self thread watch_weapon_pickup();
+			self thread watch_inventory();
 		}
 	}
 }
@@ -224,9 +232,12 @@ change_player_visibility( invisible )
 
 calculate_trophy_reveal_decay( distance )
 {
-	const max_decay = 100;
-	
-	return ( ( -1 / pow( getDvarInt( "trophy_system_invis_reveal_radius" ) / 10, 2 ) ) * pow( distance, 2 ) ) + max_decay; 
+	return ( ( -1 / pow( getDvarFloat( "assassin_invis_trophy_reveal_radius" ) / 10, 2 ) ) * pow( distance, 2 ) ) + getDvarFloat( "assassin_invis_trophy_reveal_radius_max_decay" ); 
+}
+
+calculate_player_reveal_decay( distance )
+{
+	return ( ( -1 / pow( getDvarFloat( "assassin_invis_player_nearby_reveal_radius" ) / 10, 2 ) ) * pow( distance, 2 ) ) + getDvarFloat( "assassin_invis_player_nearby_reveal_radius_max_decay" );
 }
 
 calculate_invisibility_value()
@@ -245,7 +256,36 @@ calculate_invisibility_value()
 		drain_percent_per_tick += getDvarFloat( "assassin_invis_decay_factor" );
 		speed = length( self getVelocity() );
 
-		growth_percent_per_tick = (speed / getDvarInt( "g_speed" )) * getDvarFloat( "assassin_invis_restore_factor" );
+		growth_factor = getDvarFloat( "assassin_invis_base_restore_factor" );
+
+		if ( !self isOnGround() )
+		{
+			growth_factor -= getDvarFloat( "assassin_invis_airborne_decay_factor" );
+		}
+		if ( self isSprinting() )
+		{
+			growth_factor -= getDvarFloat( "assassin_invis_sprint_decay_factor" );
+		}
+		else if ( self getStance() == "crouch" )
+		{
+			growth_factor += getDvarFloat( "assassin_invis_crouch_restore_factor" );
+		}
+
+		growth_percent_per_tick = ( speed / getDvarInt( "g_speed" ) ) * growth_factor;
+
+		nearby_player_modifier = 0;
+
+		foreach ( player in level.players )
+		{
+			if ( player.team != self.team )
+			{
+				nearby_player_factor = calculate_player_reveal_decay( distance( self.origin, player.origin ) );
+				if ( nearby_player_factor > 0 )
+				{
+					nearby_player_modifier += nearby_player_factor;
+				}
+			}
+		}
 
 		if ( self revealing_attack_action() )
 		{
@@ -258,8 +298,10 @@ calculate_invisibility_value()
 		{
 			drain_percent_per_tick += trophy_modifier;
 		}
-
-		self.assassin_vars[ "invisibility" ].current += growth_percent_per_tick;
+		else
+		{
+			self.assassin_vars[ "invisibility" ].current += growth_percent_per_tick;
+		}
 
 		self.assassin_vars[ "invisibility" ].current -= drain_percent_per_tick;
 
@@ -286,40 +328,6 @@ revealing_attack_action()
 	if ( should_reveal )
 	{
 		return true;
-	}
-
-	if ( !self actionslotfourbuttonpressed() )
-	{
-		return false;
-	}
-
-	currentkillstreak = 0;
-
-	for ( killstreaknum = 0; killstreaknum < level.maxkillstreaks; killstreaknum++ )
-	{
-		killstreakindex = maps\mp\gametypes\_class::getkillstreakindex( self.class_num, killstreaknum );
-
-		if ( isdefined( killstreakindex ) && killstreakindex > 0 )
-		{
-			assert( isdefined( level.tbl_killstreakdata[killstreakindex] ), "KillStreak #:" + killstreakindex + "'s data is undefined" );
-
-			if ( isdefined( level.tbl_killstreakdata[killstreakindex] ) )
-			{
-				self.killstreak[currentkillstreak] = level.tbl_killstreakdata[killstreakindex];
-
-				if ( isdefined( level.usingmomentum ) && level.usingmomentum )
-				{
-					killstreaktype = maps\mp\killstreaks\_killstreaks::getkillstreakbymenuname( self.killstreak[currentkillstreak] );
-
-					if ( isdefined( killstreaktype ) )
-					{
-						weapon = maps\mp\killstreaks\_killstreaks::getkillstreakweapon( killstreaktype );
-
-						return self getWeaponAmmoStock( weapon ) > 0;
-					}
-				}
-			}
-		}
 	}
 
 	return false;
@@ -409,7 +417,15 @@ watch_assasin_assassinate_ability()
 
 		self waittill( "assassin_assassinate_cd" );
 
-		self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "trophy_wars_assassin_assassinate_cooldown" );
+		if ( self.assassin_vars[ "assassinate" ].success )
+		{
+			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_success_cooldown" );
+			self.assassin_vars[ "assassinate" ].success = false;
+		}
+		else
+		{
+			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_failure_cooldown" );
+		}
 
 		self.assassin_vars[ "assassinate" ].hud.timer.color = ( 1, 1, 1 );
 
@@ -439,5 +455,31 @@ watch_weapon_pickup()
 			continue;
 		}
 		self setBlockWeaponPickup( weapon, true );
+	}
+}
+
+watch_inventory()
+{
+	self endon( "disconnect" );
+	self endon( "death" );
+
+	for (;;)
+	{
+		self waittill( "weapon_change", weapon );
+		if ( maps\mp\killstreaks\_killstreaks::iskillstreakweapon( weapon ) )
+		{
+			self.assassin_vars[ "invisibility" ].current = -999;
+			continue;
+		}
+		if ( isDefined( self.primaryloadoutweapon ) && weapon == self.primaryloadoutweapon 
+			|| isDefined( self.secondaryloadoutweapon ) && weapon == self.secondaryloadoutweapon
+			|| isDefined( self.grenadetypeprimary ) && weapon == self.grenadetypeprimary 
+			|| isDefined( self.grenadetypesecondary ) && weapon == self.grenadetypesecondary )
+		{
+			continue;
+			
+		}
+
+		self maps\mp\gametypes\_weapons::dropweapontoground( weapon );
 	}
 }
