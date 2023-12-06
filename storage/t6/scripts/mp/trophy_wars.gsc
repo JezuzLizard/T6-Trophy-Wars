@@ -48,6 +48,7 @@ init()
 	set_dvar_if_unset( "assassin_invis_player_nearby_reveal_radius_max_decay", 20 );
 	set_dvar_if_unset( "assassin_assassinate_failure_cooldown", 15 );
 	set_dvar_if_unset( "assassin_assassinate_success_cooldown", 8 );
+	set_dvar_if_unset( "assassin_assassinate_reveal_cooldown", 10 );
 
 	level thread on_player_connect();
 
@@ -81,6 +82,7 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 				{
 					idamage = self.maxhealth;
 					eattacker.assassin_vars[ "assassinate" ].success = true;
+					self thread watch_killed();
 				}
 				else 
 				{
@@ -92,7 +94,7 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 				idamage = int( self.maxhealth / 2 ) + 1;
 				break;
 			case "knife_ballistic_mp":
-				if ( isDefined( eattacker ) && distanceSquared( eattacker.origin, self.origin ) > 10000 )
+				if ( isDefined( eattacker ) && distance( eattacker.origin, self.origin ) > 300 )
 				{
 					idamage = self.maxhealth;
 				}
@@ -116,9 +118,24 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 	if ( self.is_assassin )
 	{
 		self.assassin_vars[ "invisibility" ].current = -999;
+		self.assassin_vars[ "assassinate" ].revealed_by_enemy = true;
+		self notify( "assassin_assassinate_cd" );
+		self notify( "revealed" );
 	}
 	
 	self [[ level.callbackplayerdamage_old2 ]]( einflictor, eattacker, idamage, idflags, smeansofdeath, sweapon, vpoint, vdir, shitloc, timeoffset, boneindex );
+}
+
+watch_killed()
+{
+	self waittill( "death" );
+	self.assassinated_hud.alpha = 1;
+	self.assassinated_hud fadeOverTime( 1.5 );
+	self.assassinated_hud.alpha = 0;
+	self.assassinated_hud.fontscale = 2.5;
+	self.assassinated_hud changefontscaleovertime( 1.5 );
+	self.assassinated_hud.fontscale = 3.5;
+	wait 1.5;
 }
 
 on_player_connect()
@@ -126,21 +143,30 @@ on_player_connect()
 	for (;;)
 	{
 		level waittill( "connected", player );
-		player thread on_player_spawned();
+		player thread on_loadout_given();
 
 		player.is_assassin = false;
+		player.assassinated_hud = player createfontstring( "objective", 2.5 );
+		player.assassinated_hud setpoint( "CENTER", "CENTER", 0, 0 );
+		player.assassinated_hud.alpha = 0;
+		player.assassinated_hud.label = &"ASSASSINATED!";
+		player.assassinated_hud.hidewheninmenu = true;
+		player.assassinated_hud.color = ( 0.8, 0, 0 );
 		player.assassin_vars = [];
 		player.assassin_vars[ "assassinate" ] = spawnStruct();
 		player.assassin_vars[ "assassinate" ].success = false;
 		player.assassin_vars[ "assassinate" ].cooldown = 0;
+		player.assassin_vars[ "assassinate" ].revealed_by_enemy = false;
 		player.assassin_vars[ "assassinate" ].hud = spawnStruct();
 		player.assassin_vars[ "assassinate" ].hud.timer = player createclienttimer( "objective", 1.5 );
 		player.assassin_vars[ "assassinate" ].hud.timer.alpha = 0;
 		player.assassin_vars[ "assassinate" ].hud.timer setpoint( "BOTTOM_RIGHT", "BOTTOM_RIGHT", -30, 10 );
+		player.assassin_vars[ "assassinate" ].hud.timer.hidewheninmenu = true;
 		player.assassin_vars[ "assassinate" ].hud.text = player createfontstring( "objective", 1.5 );
 		player.assassin_vars[ "assassinate" ].hud.text.alpha = 0;
 		player.assassin_vars[ "assassinate" ].hud.text.label = &"ASSASSINATE";
 		player.assassin_vars[ "assassinate" ].hud.text setpoint( "BOTTOM_RIGHT", "BOTTOM_RIGHT", -30, -10 );
+		player.assassin_vars[ "assassinate" ].hud.text.hidewheninmenu = true;
 		player.assassin_vars[ "invisibility" ] = spawnStruct();
 		player.assassin_vars[ "invisibility" ].invisible = false;
 		player.assassin_vars[ "invisibility" ].hud = spawnStruct();
@@ -148,29 +174,31 @@ on_player_connect()
 		player.assassin_vars[ "invisibility" ].hud.bar seticonshader( "progress_bar_bg" );
 		player.assassin_vars[ "invisibility" ].hud.bar hideelem();
 		player.assassin_vars[ "invisibility" ].hud.bar setpoint( "BOTTOM", "BOTTOM", 0, 20 );
+		player.assassin_vars[ "invisibility" ].hud.bar.hidewheninmenu = true;
 		player.assassin_vars[ "invisibility" ].hud.text = player createfontstring( "objective", 1.5 );
 		player.assassin_vars[ "invisibility" ].hud.text.alpha = 0;
 		player.assassin_vars[ "invisibility" ].hud.text.label = &"INVISIBLE";
 		player.assassin_vars[ "invisibility" ].hud.text setpoint( "BOTTOM", "BOTTOM", 0, 10 );
+		player.assassin_vars[ "invisibility" ].hud.text.hidewheninmenu = true;
 		player.assassin_vars[ "invisibility" ].current = 50;
 	}
 }
 
-on_player_spawned()
+on_loadout_given()
 {
 	for (;;)
 	{
-		self waittill( "spawned_player" );
+		self waittill( "give_map" ); //giveloadout notify
+		waittillframeend;
 		//self setPerk( "specialty_pistoldeath" );
-		if ( self hasPerk( "specialty_gpsjammer" ) )
+		if ( self.class_num == level.classtoclassnum[ "CLASS_CQB" ] )
 		{
 			self.is_assassin = true;
 			self.assassin_vars[ "invisibility" ].hud.bar showelem();
 			self.assassin_vars[ "invisibility" ].hud.text.alpha = 1;
 			self.assassin_vars[ "assassinate" ].hud.timer.alpha = 1;
 			self.assassin_vars[ "assassinate" ].hud.text.alpha = 1;
-			self setPerk( "specialty_noname" );
-			self change_player_visibility( true );
+			self set_player_visibility( true );
 			self thread calculate_invisibility_value();
 			self thread watch_for_death();
 			self thread watch_attacking();
@@ -178,28 +206,41 @@ on_player_spawned()
 			self thread watch_weapon_pickup();
 			self thread watch_inventory();
 		}
+		else
+		{
+			self reset_assassin_vars();
+		}
 	}
 }
 
-watch_for_death()
+reset_assassin_vars()
 {
-	self endon( "disconnect" );
-	self waittill( "death" );
-
 	self.is_assassin = false;
 
 	self.assassin_vars[ "invisibility" ].hud.bar hideelem();
 	self.assassin_vars[ "invisibility" ].hud.text.alpha = 0;
 	self.assassin_vars[ "invisibility" ].invisible = false;
 	self.assassin_vars[ "invisibility" ].current = 0;
+	self.assassin_vars[ "assassinate" ].success = false;
 	self.assassin_vars[ "assassinate" ].cooldown = 0;
+	self.assassin_vars[ "assassinate" ].revealed_by_enemy = false;
 	self.assassin_vars[ "assassinate" ].hud.timer.alpha = 0;
 	self.assassin_vars[ "assassinate" ].hud.text.alpha = 0;
 
-	self change_player_visibility( false );
+	self set_player_visibility( false );
 }
 
-change_player_visibility( invisible )
+watch_for_death()
+{
+	self endon( "disconnect" );
+	self endon( "changed_class" );
+
+	self waittill( "death" );
+
+	self reset_assassin_vars();
+}
+
+set_player_visibility( invisible )
 {
 	players = getPlayers();
 	for ( i = 0; i < players.size; i++ )
@@ -244,6 +285,7 @@ calculate_invisibility_value()
 {
 	self endon( "disconnect" );
 	self endon( "death" );
+	self endon( "changed_class" );
 
 	const max_amount = 100;
 	const min_amount = 0;
@@ -262,7 +304,7 @@ calculate_invisibility_value()
 		{
 			growth_factor -= getDvarFloat( "assassin_invis_airborne_decay_factor" );
 		}
-		if ( self isSprinting() )
+		if ( self isSprinting() || self isPlayerSprinting() )
 		{
 			growth_factor -= getDvarFloat( "assassin_invis_sprint_decay_factor" );
 		}
@@ -307,13 +349,19 @@ calculate_invisibility_value()
 
 		if ( self.assassin_vars[ "invisibility" ].current <= min_amount )
 		{
+			if ( trophy_modifier > 0 || nearby_player_modifier > 0 )
+			{
+				self.assassin_vars[ "assassinate" ].revealed_by_enemy = true;
+				self notify( "assassin_assassinate_cd" );
+				self notify( "revealed" );
+			}
 			self.assassin_vars[ "invisibility" ].current = min_amount;
-			self change_player_visibility( false );
+			self set_player_visibility( false );
 		}
 		else if ( self.assassin_vars[ "invisibility" ].current >= max_amount)
 		{
 			self.assassin_vars[ "invisibility" ].current = max_amount;
-			self change_player_visibility( true );
+			self set_player_visibility( true );
 		}
 
 		self.assassin_vars[ "invisibility" ].hud.bar updateBar( self.assassin_vars[ "invisibility" ].current / max_amount );
@@ -374,6 +422,7 @@ watch_attacking()
 {
 	self endon( "disconnect" );
 	self endon( "death" );
+	self endon( "changed_class" );
 
 	for (;;)
 	{
@@ -391,11 +440,26 @@ watch_assassinate_ability_cooldown()
 {
 	for (;;)
 	{
-		cooldown_time = self.assassin_vars[ "assassinate" ].cooldown;
+		if ( self.assassin_vars[ "assassinate" ].success )
+		{
+			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_success_cooldown" );
+			self.assassin_vars[ "assassinate" ].success = false;
+		}
+		else if ( !self.assassin_vars[ "assassinate" ].revealed_by_enemy )
+		{
+			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_failure_cooldown" );
+		}
+		else
+		{
+			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_reveal_cooldown" );
+			self.assassin_vars[ "assassinate" ].revealed_by_enemy = false;
+		}
+
+		cooldown_time = self.assassin_vars[ "assassinate" ].cooldown ;
 
 		self.assassin_vars[ "assassinate" ].hud.timer setTimer( cooldown_time );
 
-		event = self waittill_any_timeout( cooldown_time, "attacked" );
+		event = self waittill_any_timeout( cooldown_time, "attacked", "revealed" );
 
 		if ( event == "timeout" )
 		{
@@ -408,6 +472,7 @@ watch_assasin_assassinate_ability()
 {
 	self endon( "disconnect" );
 	self endon( "death" );
+	self endon( "changed_class" );
 
 	for (;;)
 	{
@@ -416,16 +481,6 @@ watch_assasin_assassinate_ability()
 		self.assassin_vars[ "assassinate" ].cooldown = 0;
 
 		self waittill( "assassin_assassinate_cd" );
-
-		if ( self.assassin_vars[ "assassinate" ].success )
-		{
-			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_success_cooldown" );
-			self.assassin_vars[ "assassinate" ].success = false;
-		}
-		else
-		{
-			self.assassin_vars[ "assassinate" ].cooldown = getDvarInt( "assassin_assassinate_failure_cooldown" );
-		}
 
 		self.assassin_vars[ "assassinate" ].hud.timer.color = ( 1, 1, 1 );
 
@@ -437,6 +492,8 @@ watch_weapon_pickup()
 {
 	self endon( "disconnect" );
 	self endon( "death" );
+	self endon( "changed_class" );
+
 	first = true;
 	weapon = undefined;
 	for (;;)
@@ -462,6 +519,7 @@ watch_inventory()
 {
 	self endon( "disconnect" );
 	self endon( "death" );
+	self endon( "changed_class" );
 
 	for (;;)
 	{
