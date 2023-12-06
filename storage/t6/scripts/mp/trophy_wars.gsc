@@ -49,6 +49,10 @@ init()
 	set_dvar_if_unset( "assassin_assassinate_failure_cooldown", 15 );
 	set_dvar_if_unset( "assassin_assassinate_success_cooldown", 8 );
 	set_dvar_if_unset( "assassin_assassinate_reveal_cooldown", 10 );
+	set_dvar_if_unset( "saboteur_dash_speed_multiplier", 4 );
+	set_dvar_if_unset( "saboteur_dash_speed_cap", 500 );
+	set_dvar_if_unset( "saboteur_dash_cooldown", 8 );
+	set_dvar_if_unset( "saboteur_dash_strafe_factor", 0.9 ); 
 
 	level thread on_player_connect();
 
@@ -144,6 +148,9 @@ on_player_connect()
 	{
 		level waittill( "connected", player );
 		player thread on_loadout_given();
+		player thread dash_ability();
+		
+		player.dash_cooldown = false;
 
 		player.is_assassin = false;
 		player.assassinated_hud = player createfontstring( "objective", 2.5 );
@@ -181,6 +188,7 @@ on_player_connect()
 		player.assassin_vars[ "invisibility" ].hud.text setpoint( "BOTTOM", "BOTTOM", 0, 10 );
 		player.assassin_vars[ "invisibility" ].hud.text.hidewheninmenu = true;
 		player.assassin_vars[ "invisibility" ].current = 50;
+		player.saboteur_vars = [];
 	}
 }
 
@@ -190,6 +198,8 @@ on_loadout_given()
 	{
 		self waittill( "give_map" ); //giveloadout notify
 		waittillframeend;
+		self thread watch_for_death();
+		self reset_assassin_vars();
 		//self setPerk( "specialty_pistoldeath" );
 		if ( self.class_num == level.classtoclassnum[ "CLASS_CQB" ] )
 		{
@@ -200,15 +210,17 @@ on_loadout_given()
 			self.assassin_vars[ "assassinate" ].hud.text.alpha = 1;
 			self set_player_visibility( true );
 			self thread calculate_invisibility_value();
-			self thread watch_for_death();
 			self thread watch_attacking();
 			self thread watch_assasin_assassinate_ability();
 			self thread watch_weapon_pickup();
 			self thread watch_inventory();
 		}
-		else
+		else if ( self.class_num == level.classtoclassnum[ "CLASS_LMG" ] )
 		{
-			self reset_assassin_vars();
+			self.is_saboteur = true;
+			self.saboteur_vars[ "dash" ] = spawnStruct();
+			self thread watch_double_tap_jump();
+			self thread dash_ability();
 		}
 	}
 }
@@ -236,6 +248,8 @@ watch_for_death()
 	self endon( "changed_class" );
 
 	self waittill( "death" );
+
+	self.dash_cooldown = false;
 
 	self reset_assassin_vars();
 }
@@ -539,5 +553,85 @@ watch_inventory()
 		}
 
 		self maps\mp\gametypes\_weapons::dropweapontoground( weapon );
+	}
+}
+
+watch_double_tap_jump()
+{
+	self endon( "disconnect" );
+	self endon( "death" );
+	self endon( "changed_class" );
+
+	self notifyOnPlayerCommand( "jump_pressed", "+gostand" );
+
+	for (;;)
+	{
+		self waittill( "jump_pressed" );
+
+		event = self waittill_any_timeout( 0.25, "jump_pressed" );
+
+		if ( event == "timeout" )
+		{
+			continue;
+		}
+
+		self notify( "dash" );
+	}
+}
+
+dash_cooldown()
+{
+	self endon( "disconnect" );
+	self endon( "death" );
+
+	self.dash_cooldown = true;
+
+	cooldown_time = getDvarFloat( "saboteur_dash_cooldown" );
+
+	for ( i = cooldown_time; i > 0; i++ )
+	{
+		wait 0.05;
+	}
+
+	self.dash_cooldown = false;
+}
+
+dash_ability()
+{
+	self endon( "disconnect" );
+	self endon( "death" );
+	self endon( "changed_class" );
+
+	for (;;)
+	{
+		self waittill( "dash" );
+
+		if ( self.dash_cooldown )
+		{
+			continue;
+		}
+
+		self thread dash_cooldown();
+
+		v = self getVelocity();
+		v = ( v[ 0 ], v[ 1 ], 0 );
+
+		speed = length( v );
+
+		dash_modifier = ( speed / getDvarInt( "g_speed" ) );
+
+		v = v * dash_modifier * getDvarFloat( "saboteur_dash_speed_multiplier" );
+
+		speed_cap = getDvarFloat( "saboteur_dash_speed_cap" );
+
+		if ( length( v ) > speed_cap )
+		{
+			v = VectorNormalize( v );
+			v *= speed_cap;
+		}
+
+		v = ( v[ 0 ], v[ 1 ] * getDvarFloat( "saboteur_dash_strafe_factor" ), 0 ); 
+
+		self setVelocity( self getVelocity() + v );
 	}
 }
