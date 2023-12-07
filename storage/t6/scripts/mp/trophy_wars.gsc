@@ -7,9 +7,9 @@
 main()
 {
 	replaceFunc( maps\mp\bots\_bot_combat::threat_should_ignore, ::threat_should_ignore_override );
-	//replaceFunc( maps\mp\_trophy_system::ontrophysystemspawn, ::ontrophysystemspawn_override );
-	//replaceFunc( maps\mp\_trophy_system::trophywatchhack, ::trophywatchhack_override );
-	//replaceFunc( maps\mp\_trophy_system::trophyactive, ::trophyactive_override );
+	replaceFunc( maps\mp\_trophy_system::ontrophysystemspawn, ::ontrophysystemspawn_override );
+	replaceFunc( maps\mp\_trophy_system::trophywatchhack, ::trophywatchhack_override );
+	replaceFunc( maps\mp\_trophy_system::trophyactive, ::trophyactive_override );
 }
 
 threat_should_ignore_override( entity )
@@ -200,4 +200,160 @@ watch_for_death()
 	{
 		self [[ classa.reset_func ]]();
 	}
+}
+
+ontrophysystemspawn_override( watcher, player )
+{
+	player endon( "death" );
+	player endon( "disconnect" );
+	level endon( "game_ended" );
+	self maps\mp\gametypes\_weaponobjects::onspawnuseweaponobject( watcher, player );
+	player addweaponstat( "trophy_system_mp", "used", 1 );
+	self.ammo = 10000;
+	self thread trophyactive( player );
+	self thread trophywatchhack();
+	self setclientfield( "trophy_system_state", 1 );
+	self playloopsound( "wpn_trophy_spin", 0.25 );
+
+	if ( isdefined( watcher.reconmodel ) )
+		self thread setreconmodeldeployed();
+
+	self.spawn_time = getTime();
+
+	level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
+}
+
+trophywatchhack_override()
+{
+    self endon( "death" );
+
+    self waittill( "hacked", player );
+
+	for ( i = 0; i < level.trophy_systems[ self.owner.team ].size; i++ )
+	{
+		if ( level.trophy_systems[ self.owner.team ][ i ] == self )
+		{
+			level.trophy_systems[ self.owner.team ][ i ] = undefined;
+			level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
+		}
+	}
+
+    wait 0.05;
+    self thread trophyactive( player );
+}
+
+trophyactive_override( owner )
+{
+    owner endon( "disconnect" );
+    self endon( "death" );
+    self endon( "hacked" );
+
+    while ( true )
+    {
+        tac_inserts = maps\mp\_tacticalinsertion::gettacticalinsertions();
+
+        if ( level.missileentities.size < 1 && tac_inserts.size < 1 || isdefined( self.disabled ) )
+        {
+            wait 0.05;
+            continue;
+        }
+
+        for ( index = 0; index < level.missileentities.size; index++ )
+        {
+            wait 0.05;
+            grenade = level.missileentities[index];
+
+            if ( !isdefined( grenade ) )
+                continue;
+
+            if ( grenade == self )
+                continue;
+
+            // if ( isdefined( grenade.weaponname ) )
+            // {
+            //     switch ( grenade.weaponname )
+            //     {
+            //         case "claymore_mp":
+            //             continue;
+            //     }
+            // }
+
+            if ( isdefined( grenade.name ) && grenade.name == "tactical_insertion_mp" )
+                continue;
+
+            switch ( grenade.model )
+            {
+                case "t6_wpn_grenade_supply_projectile":
+                    continue;
+            }
+
+            if ( !isdefined( grenade.owner ) )
+                grenade.owner = getmissileowner( grenade );
+
+            if ( isdefined( grenade.owner ) )
+            {
+                if ( level.teambased )
+                {
+                    if ( grenade.owner.team == owner.team )
+                        continue;
+                }
+                else if ( grenade.owner == owner )
+                    continue;
+
+                grenadedistancesquared = distancesquared( grenade.origin, self.origin );
+
+                if ( grenadedistancesquared < 262144 )
+                {
+                    if ( bullettracepassed( grenade.origin, self.origin + vectorscale( ( 0, 0, 1 ), 29.0 ), 0, self ) )
+                    {
+                        playfx( level.trophylongflashfx, self.origin + vectorscale( ( 0, 0, 1 ), 15.0 ), grenade.origin - self.origin, anglestoup( self.angles ) );
+                        owner thread projectileexplode( grenade, self );
+                        index--;
+                        self playsound( "wpn_trophy_alert" );
+                        self.ammo--;
+
+                        if ( self.ammo <= 0 )
+                            self thread trophysystemdetonate();
+                    }
+                }
+            }
+        }
+
+        for ( index = 0; index < tac_inserts.size; index++ )
+        {
+            wait 0.05;
+            tac_insert = tac_inserts[index];
+
+            if ( !isdefined( tac_insert ) )
+                continue;
+
+            if ( isdefined( tac_insert.owner ) )
+            {
+                if ( level.teambased )
+                {
+                    if ( tac_insert.owner.team == owner.team )
+                        continue;
+                }
+                else if ( tac_insert.owner == owner )
+                    continue;
+
+                grenadedistancesquared = distancesquared( tac_insert.origin, self.origin );
+
+                if ( grenadedistancesquared < 262144 )
+                {
+                    if ( bullettracepassed( tac_insert.origin, self.origin + vectorscale( ( 0, 0, 1 ), 29.0 ), 0, tac_insert ) )
+                    {
+                        playfx( level.trophylongflashfx, self.origin + vectorscale( ( 0, 0, 1 ), 15.0 ), tac_insert.origin - self.origin, anglestoup( self.angles ) );
+                        owner thread trophydestroytacinsert( tac_insert, self );
+                        index--;
+                        self playsound( "wpn_trophy_alert" );
+                        self.ammo--;
+
+                        if ( self.ammo <= 0 )
+                            self thread trophysystemdetonate();
+                    }
+                }
+            }
+        }
+    }
 }
