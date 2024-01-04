@@ -6,6 +6,10 @@
 
 main()
 {
+	if ( isDedicated() && !getDvarInt( "trophy_wars_gametype_active" ) )
+	{
+		return;
+	}
 	replaceFunc( maps\mp\bots\_bot_combat::threat_should_ignore, ::threat_should_ignore_override );
 	replaceFunc( maps\mp\_trophy_system::ontrophysystemspawn, ::ontrophysystemspawn_override );
 	replaceFunc( maps\mp\_trophy_system::trophywatchhack, ::trophywatchhack_override );
@@ -33,13 +37,23 @@ threat_should_ignore_override( entity )
 
 init()
 {
+	if ( isDedicated() && !getDvarInt( "trophy_wars_gametype_active" ) )
+	{
+		return;
+	}
 	level.trophy_systems = [];
 	level.trophy_systems[ "allies" ] = [];
 	level.trophy_systems[ "axis" ] = [];
-	for ( i = 3; i < getGametypeSetting( "teamCount" ); i++ )
+	team_count = getGametypeSetting( "teamCount" );
+	for ( i = 3; i < team_count; i++ )
 	{
 		level.trophy_systems[ "team" + i ] = [];
 	}
+
+	set_dvar_if_unset( "trophy_system_radius", 512 );
+	set_dvar_if_unset( "trophy_system_ammo_cap", 10 );
+	set_dvar_if_unset( "trophy_system_ammo_regen_amount", 1 );
+	set_dvar_if_unset( "trophy_system_ammo_regen_time_ticks", 1200 );
 
 	scripts\mp\trophy_wars_classes\assassin::init_assassin_class();
 	scripts\mp\trophy_wars_classes\saboteur::init_saboteur_class();
@@ -74,6 +88,21 @@ register_tw_class( class_name, class_override, class_num, class_player_init, cla
 	level.tw_class_num_to_class[ class_num + "" ] = c;
 }
 
+register_bot_callbacks( connected_func, spawned_func, loadout_func )
+{
+	if ( !isDefined( level.tw_bot_callbacks ) )
+	{
+		level.tw_bot_callbacks = [];
+	}
+
+	s = spawnStruct();
+	s.connected_func = connected_func;
+	s.spawned_func = spawned_func;
+	s.loadout_func = loadout_func;
+
+	level.tw_bot_callbacks[ level.tw_bot_callbacks.size ] = s;
+}
+
 trophy_wars_player_laststand( einflictor, attacker, idamage, smeansofdeath, sweapon, vdir, shitloc, psoffsettime, deathanimduration )
 {
     //self.health = 1;
@@ -89,15 +118,21 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 				idamage = int( self.maxhealth / 2 ) + 1;
 				break;
 			case "knife_held_mp":
-			    vangles = self getPlayerAngles()[1];
-        		pangles = eattacker getPlayerAngles()[1];
-			    anglediff = angleclamp180( vangles - pangles );
-
-				if ( eattacker.is_assassin && eattacker.assassin_vars[ "assassinate" ].cooldown == 0 && anglediff > -30 && anglediff < 70 )
+				vangles = self getPlayerAngles()[1];
+				pangles = eattacker getPlayerAngles()[1];
+				anglediff = angleclamp180( vangles - pangles );
+				if ( eattacker.is_assassin )
 				{
-					idamage = self.maxhealth;
-					eattacker.assassin_vars[ "assassinate" ].success = true;
-					self thread watch_killed();
+					if ( eattacker.assassin_vars[ "assassinate" ].cooldown == 0 && anglediff > -30 && anglediff < 70 )
+					{
+						idamage = self.maxhealth;
+						eattacker.assassin_vars[ "assassinate" ].success = true;
+						self thread watch_killed();
+					}
+					else
+					{
+						idamage = int( self.maxhealth / 3 ) + 1;	
+					}
 				}
 				else 
 				{
@@ -109,7 +144,7 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 				idamage = int( self.maxhealth / 2 ) + 1;
 				break;
 			case "knife_ballistic_mp":
-				if ( isDefined( eattacker ) && distance( eattacker.origin, self.origin ) > 300 )
+				if ( smeansofdeath == "MOD_IMPACT" )
 				{
 					idamage = self.maxhealth;
 				}
@@ -119,8 +154,10 @@ trophy_wars_player_damage( einflictor, eattacker, idamage, idflags, smeansofdeat
 				}
 				break;
 			case "concussion_grenade_mp":
-			case "proximity_grenade_aoe_mp":
 				idamage = int( self.maxhealth / 2 ) + 1;
+				break;
+			case "proximity_grenade_aoe_mp":
+				idamage = int( ( self.maxhealth / 2 ) / level.proximitygrenadedotdamageinstances ) + 1;
 				break;
 			case "claymore_mp":
 			case "satchel_charge_mp":
@@ -163,6 +200,14 @@ on_player_connect()
 		foreach ( classa in level.tw_classes )
 		{
 			player [[ classa.init_func ]]();
+		}
+
+		if ( player isTestClient() )
+		{
+			foreach ( callbacks in level.tw_bot_callbacks )
+			{
+				player thread [[ callbacks.connected_func ]]();
+			}
 		}
 	}
 }
@@ -209,7 +254,7 @@ ontrophysystemspawn_override( watcher, player )
 	level endon( "game_ended" );
 	self maps\mp\gametypes\_weaponobjects::onspawnuseweaponobject( watcher, player );
 	player addweaponstat( "trophy_system_mp", "used", 1 );
-	self.ammo = 10000;
+	self.ammo = getDvarInt( "trophy_system_ammo_cap" );
 	self thread trophyactive( player );
 	self thread trophywatchhack();
 	self setclientfield( "trophy_system_state", 1 );
@@ -218,28 +263,55 @@ ontrophysystemspawn_override( watcher, player )
 	if ( isdefined( watcher.reconmodel ) )
 		self thread setreconmodeldeployed();
 
+	self thread trophy_system_regenerate_ammo();
+
 	self.spawn_time = getTime();
 
 	level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
 }
 
-trophywatchhack_override()
+trophy_system_regenerate_ammo()
 {
-    self endon( "death" );
+	self endon( "death" );
 
-    self waittill( "hacked", player );
-
-	for ( i = 0; i < level.trophy_systems[ self.owner.team ].size; i++ )
+	for (;;)
 	{
-		if ( level.trophy_systems[ self.owner.team ][ i ] == self )
+		for ( i = getDvarInt( "trophy_system_ammo_regen_time_ticks" ); i >= 0; i-- )
 		{
-			level.trophy_systems[ self.owner.team ][ i ] = undefined;
-			level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
+			wait 0.05;
+		}
+
+		self.ammo += getDvarInt( "trophy_system_ammo_regen_amount" );
+
+		ammo_cap = getDvarInt( "trophy_system_ammo_cap" );
+
+		if ( self.ammo > ammo_cap )
+		{
+			self.ammo = ammo_cap;
 		}
 	}
+}
 
-    wait 0.05;
-    self thread trophyactive( player );
+trophywatchhack_override()
+{
+	self endon( "death" );
+
+	for (;;)
+	{
+		self waittill( "hacked", player );
+
+		for ( i = 0; i < level.trophy_systems[ self.owner.team ].size; i++ )
+		{
+			if ( level.trophy_systems[ self.owner.team ][ i ] == self )
+			{
+				level.trophy_systems[ self.owner.team ][ i ] = undefined;
+				level.trophy_systems[ player.team ][ level.trophy_systems[ player.team ].size ] = self;
+			}
+		}
+
+		wait 0.05;
+		self thread trophyactive( player );
+	}
 }
 
 trophyactive_override( owner )
@@ -302,7 +374,7 @@ trophyactive_override( owner )
 
                 grenadedistancesquared = distancesquared( grenade.origin, self.origin );
 
-                if ( grenadedistancesquared < 262144 )
+                if ( grenadedistancesquared < pow( getDvarFloat( "trophy_system_radius" ), 2 ) )
                 {
                     if ( bullettracepassed( grenade.origin, self.origin + vectorscale( ( 0, 0, 1 ), 29.0 ), 0, self ) )
                     {
@@ -339,7 +411,7 @@ trophyactive_override( owner )
 
                 grenadedistancesquared = distancesquared( tac_insert.origin, self.origin );
 
-                if ( grenadedistancesquared < 262144 )
+                if ( grenadedistancesquared < pow( getDvarFloat( "trophy_system_radius" ), 2 ) )
                 {
                     if ( bullettracepassed( tac_insert.origin, self.origin + vectorscale( ( 0, 0, 1 ), 29.0 ), 0, tac_insert ) )
                     {

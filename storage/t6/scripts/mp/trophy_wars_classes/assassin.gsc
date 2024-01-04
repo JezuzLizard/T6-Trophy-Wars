@@ -11,7 +11,7 @@ init_assassin_class()
 	set_dvar_if_unset( "assassin_invis_decay_factor", 1.0 );
 	set_dvar_if_unset( "assassin_invis_trophy_reveal_radius", 750 );
 	set_dvar_if_unset( "assassin_invis_trophy_reveal_radius_max_decay", 10 );
-	set_dvar_if_unset( "assassin_invis_reveal_delay_ms", 1500 );
+	set_dvar_if_unset( "assassin_invis_trophy_nearby_reveal_delay_ms", 1500 );
 	set_dvar_if_unset( "assassin_invis_player_nearby_reveal_radius", 187.5 );
 	set_dvar_if_unset( "assassin_invis_player_nearby_reveal_radius_max_decay", 20 );
 	set_dvar_if_unset( "assassin_assassinate_failure_cooldown_ticks", 300 );
@@ -19,6 +19,8 @@ init_assassin_class()
 	set_dvar_if_unset( "assassin_assassinate_reveal_cooldown_ticks", 200 );
 
 	scripts\mp\trophy_wars::register_tw_class( "assassin", "CLASS_CQB", 11, ::player_init, ::player_reset, ::loadout );
+
+	scripts\mp\trophy_wars::register_bot_callbacks( ::bot_lose_invisible_players, undefined, undefined );
 }
 
 player_init()
@@ -127,7 +129,7 @@ set_player_visibility( invisible )
 
 calculate_special_reveal_decay( distance, base, y_intercept )
 {
-	return ( ( -1 / pow( getDvarFloat( base ) / 10, 2 ) ) * pow( distance, 2 ) ) + y_intercept;
+	return ( ( -1 / pow( base / 10, 2 ) ) * pow( distance, 2 ) ) + y_intercept;
 }
 
 calculate_invisibility_value()
@@ -153,7 +155,7 @@ calculate_invisibility_value()
 		{
 			growth_factor -= getDvarFloat( "assassin_invis_airborne_decay_factor" );
 		}
-		if ( self isSprinting() || self isPlayerSprinting() )
+		if ( !self isTestClient() && ( self isSprinting() || self isPlayerSprinting() ) )
 		{
 			growth_factor -= getDvarFloat( "assassin_invis_sprint_decay_factor" );
 		}
@@ -252,7 +254,11 @@ distance_from_closest_trophy()
 			{
 				continue;
 			}
-			if ( getTime() < trophies[ j ].spawn_time + getDvarInt( "assassin_invis_reveal_delay_ms" ) )
+			if ( getTime() < trophies[ j ].spawn_time + getDvarInt( "assassin_invis_trophy_nearby_reveal_delay_ms" ) )
+			{
+				continue;
+			}
+			if ( !bullettracepassed( trophies[ j ].origin, self.origin + vectorscale( ( 0, 0, 1 ), 29.0 ), 0, trophies[ j ] ) ) 
 			{
 				continue;
 			}
@@ -388,5 +394,42 @@ watch_inventory()
 		}
 
 		self maps\mp\gametypes\_weapons::dropweapontoground( weapon );
+	}
+}
+
+bot_lose_invisible_players()
+{
+	self endon( "disconnect" );
+
+	while ( !isDefined( self.bot ) )
+	{
+		wait 0.05;
+	}
+
+	for (;;)
+	{
+		wait 0.05;
+		if ( !isDefined( self.bot.threat.entity ) )
+		{
+			continue;
+		}
+		if ( !isPlayer( self.bot.threat.entity ) )
+		{
+			continue;
+		}
+
+		player = self.bot.threat.entity;
+
+		if ( !player.is_assassin )
+		{
+			continue;
+		}
+
+		if ( !player.assassin_vars[ "invisibility" ].invisible )
+		{
+			continue;
+		}
+
+		self maps\mp\bots\_bot_combat::bot_clear_enemy();
 	}
 }

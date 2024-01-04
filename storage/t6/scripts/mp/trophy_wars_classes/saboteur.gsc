@@ -80,7 +80,7 @@ dash_cooldown()
 	self endon( "death" );
 	self endon( "changed_class" );
 
-	self.saboteur_vars[ "dash" ].cooldown = getDvarFloat( "saboteur_dash_cooldown_ticks" );
+	self.saboteur_vars[ "dash" ].cooldown = getDvarint( "saboteur_dash_cooldown_ticks" );
 
 	self.saboteur_vars[ "dash" ].hud.timer setTimer( self.saboteur_vars[ "dash" ].cooldown / 20 );
 
